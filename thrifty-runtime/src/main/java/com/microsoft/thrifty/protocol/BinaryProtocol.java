@@ -97,7 +97,7 @@ public class BinaryProtocol extends Protocol {
         }
     }
 
-    BinaryProtocol(Builder builder) {
+    public BinaryProtocol(Builder builder) {
         super(builder.transport);
         this.stringLengthLimit = builder.stringLengthLimit;
         this.containerLengthLimit = builder.containerLengthLimit;

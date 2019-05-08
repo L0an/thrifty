@@ -111,7 +111,7 @@ class CoroutineConformanceTests(
 
     private fun createProtocol(transport: Transport): Protocol {
         return when (serverProtocol) {
-            ServerProtocol.BINARY -> BinaryProtocol(transport)
+            ServerProtocol.BINARY -> BinaryProtocol(BinaryProtocol.Builder(transport))
             ServerProtocol.COMPACT -> CompactProtocol(transport)
             ServerProtocol.JSON ->  JsonProtocol(transport)
         }
