@@ -1,55 +1,49 @@
-/*
- * Thrifty
- *
- * Copyright (c) Microsoft Corporation
- *
- * All rights reserved.
- *
- * Licensed under the Apache License, Version 2.0 (the License);
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *     http://www.apache.org/licenses/LICENSE-2.0
- *
- * THIS CODE IS PROVIDED ON AN  *AS IS* BASIS, WITHOUT WARRANTIES OR
- * CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING
- * WITHOUT LIMITATION ANY IMPLIED WARRANTIES OR CONDITIONS OF TITLE,
- * FITNESS FOR A PARTICULAR PURPOSE, MERCHANTABLITY OR NON-INFRINGEMENT.
- *
- * See the Apache Version 2.0 License for specific language governing permissions and limitations under the License.
- */
 package com.microsoft.thrifty.transport;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.Map;
 
 public class URLTransport extends Transport {
-
     private URL url;
-    private int timeout = 0;
+    private int connectTimeout;
+    private int readTimeout;
+    private Map<String, String> customHeaders;
 
-    private HttpURLConnection connection;
-    private InputStream inputStream;
-    private ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+    private InputStream inputStream = null;
+    private final ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
 
     public static class Builder {
-
         private URL url;
-        private int timeout = 0;
+        private int connectTimeout = 0;
+        private int readTimeout = 0;
+        private Map<String, String> customHeaders;
 
         public Builder(URL url) {
             this.url = url;
         }
 
-        public Builder setTimeout(int timeout) {
+        public Builder setConnectionTimeout(int timeout) {
             if (timeout < 0) {
                 throw new IllegalArgumentException("timeout can not be negative");
             }
-            this.timeout = timeout;
+            this.connectTimeout = timeout;
+            return this;
+        }
+
+        public Builder setReadTimeout(int timeout) {
+            if (timeout < 0) {
+                throw new IllegalArgumentException("timeout can not be negative");
+            }
+            this.readTimeout = timeout;
+            return this;
+        }
+
+        public Builder setCustomHeaders(Map<String, String> headers) {
+            this.customHeaders = headers;
             return this;
         }
 
@@ -60,12 +54,25 @@ public class URLTransport extends Transport {
 
     URLTransport(Builder builder) {
         this.url = builder.url;
-        this.timeout = builder.timeout;
+        this.connectTimeout = builder.connectTimeout;
+        this.readTimeout = builder.readTimeout;
+        this.customHeaders = builder.customHeaders;
     }
 
     @Override
     public int read(byte[] buffer, int offset, int count) throws IOException {
-        return inputStream.read(buffer, offset, count);
+        if (inputStream == null) {
+            throw new IOException("Response buffer is empty, no request.");
+        }
+        try {
+            int bytes = inputStream.read(buffer, offset, count);
+            if (bytes == -1) {
+                throw new IOException("No more data available.");
+            }
+            return bytes;
+        } catch (IOException iox) {
+            throw new IOException(iox);
+        }
     }
 
     @Override
@@ -75,48 +82,56 @@ public class URLTransport extends Transport {
 
     @Override
     public void flush() throws IOException {
-
-        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-
+        // Extract request and reset buffer
         byte[] data = outputStream.toByteArray();
         outputStream.reset();
 
-        connection.setRequestMethod("POST");
-        connection.setConnectTimeout(timeout);
-        connection.setDoOutput(true);
+        // Create connection object
+        HttpURLConnection connection = (HttpURLConnection) url.openConnection();
 
-        connection.setRequestProperty("Accept", "application/x-thrift");
-        connection.setRequestProperty("Content-Type", "application/x-thrift");
-
-        connection.connect();
-
-        connection.getOutputStream().write(data);
-        int code = connection.getResponseCode();
-        if (code != HttpURLConnection.HTTP_OK) {
-            throw new IOException("HTTP response code not OK");
+        // Timeouts, only if explicitly set
+        if (connectTimeout > 0) {
+            connection.setConnectTimeout(connectTimeout);
+        }
+        if (readTimeout > 0) {
+            connection.setReadTimeout(readTimeout);
         }
 
-        this.inputStream = connection.getInputStream();
+        // Make the request
+        connection.setRequestMethod("POST");
+        connection.setRequestProperty("Content-Type", "application/x-thrift");
+        connection.setRequestProperty("Accept", "application/x-thrift");
+        if (customHeaders != null) {
+            for (Map.Entry<String, String> header : customHeaders.entrySet()) {
+                connection.setRequestProperty(header.getKey(), header.getValue());
+            }
+        }
+        connection.setDoOutput(true);
+        connection.connect();
+        connection.getOutputStream().write(data);
+
+        int responseCode = connection.getResponseCode();
+        if (responseCode != HttpURLConnection.HTTP_OK) {
+            throw new IOException("HTTP Response code: " + responseCode);
+        }
+
+        // Read the responses
+        inputStream = connection.getInputStream();
     }
 
     @Override
     public void close() throws IOException {
-        HttpURLConnection connection = this.connection;
-        InputStream inputStream = this.inputStream;
-        OutputStream outputStream = this.outputStream;
-
-        this.connection = null;
-
-        try {
-            inputStream.close();
-        } catch (Exception ignored) {
+        if (inputStream != null) {
+            try {
+                inputStream.close();
+            } catch (IOException ignored) {
+            } finally {
+                inputStream = null;
+            }
         }
-
         try {
             outputStream.close();
-        } catch (Exception ignored) {
+        } catch (IOException ignored) {
         }
-
-        connection.disconnect();
     }
 }
